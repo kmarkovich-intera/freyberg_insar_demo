@@ -101,12 +101,12 @@ def prep_truth_model(t_d, run=False):
 
     # # fix the wel flux files
     # wel_files = [f for f in os.listdir(t_d) if ".wel_stress_period_data" in f]
-    # wel_files = {int(f.split(".")[1].split("_")[-1]): pd.read_csv(os.path.join(t_d, f), header=None,
-    #                                                               names=["l", "r", "c", "flux"]) for f in wel_files}
-    #
-    # for sp, df in wel_files.items():
-    #     df.to_csv(os.path.join(t_d, "freyberg_csub.wel_stress_period_data_{0}.txt".format(sp)), index=False, header=False,
-    #               sep=" ")
+    # for wel_file in wel_files:
+    #     sp = wel_file.split('_')[-1].split('.')[0]
+    #     df = pd.read_csv(os.path.join(t_d, wel_file), header=None, names=["l", "r", "c", "flux"])
+    #     df = df.astype({"l": int, "r": int, "c": int, "flux": np.float16})
+    #     df.to_csv(os.path.join(t_d, "freyberg6.wel_stress_period_data_{0}.txt".format(sp)), index=False,
+    #               header=False,  sep=" ")
 
     #load model
     sim = flopy.mf6.MFSimulation.load(sim_ws=t_d)
@@ -120,8 +120,8 @@ def prep_truth_model(t_d, run=False):
     sim_name = 'freyberg_csub'
 
     new_sim = flopy.mf6.MFSimulation(
-        sim_name=sim_name, sim_ws=new_d,
-    )
+        sim_name=sim_name, sim_ws=new_d, continue_=True)
+
     flopy.mf6.ModflowTdis(
         new_sim, nper=nper, perioddata=prd,
     )
@@ -130,8 +130,8 @@ def prep_truth_model(t_d, run=False):
         complexity = 'complex',
     )
     gwf = flopy.mf6.ModflowGwf(
-        new_sim, modelname=sim_name, save_flows=True, newtonoptions="newton", print_flows=False,
-    )
+        new_sim, modelname=sim_name, save_flows=True, newtonoptions="newton", print_flows=False, )
+
     flopy.mf6.ModflowGwfdis(
         gwf,
         nlay=nlay,
@@ -161,17 +161,24 @@ def prep_truth_model(t_d, run=False):
         save_flows=True,
     )
 
+    #rech is sine wave inverse to pumping
+    fs = 732  # sample rate
+    f = 2  # the frequency of the signal
+    x = np.arange(fs)  # the points on the x axis for plotting
+    # compute the value (amplitude) of the sin wave at the for each sample
+    y = 0.0001*np.sin(2 * np.pi * f * (x / fs)) + 0.0001
+
     rec_data = {}
     files = [f for f in os.listdir(t_d) if ".rch" in f.lower() and f.endswith(".txt")]
     assert len(files) > 0
-    for f in files:
-        arr = np.loadtxt(os.path.join(t_d, f))
-        sp = int(f.split(".")[1].split("_")[-1])
-        rec_data[(sp - 1)] = arr
+    for i in range(len(files)):
+        arr = np.ones((nrow,ncol))
+        arr = arr * y[i]
+        rec_data[i] = arr
 
     rch = flopy.mf6.ModflowGwfrcha(
         gwf,
-        recharge = rec_data,
+        recharge=rec_data,
         save_flows=True,
     )
 
@@ -189,18 +196,34 @@ def prep_truth_model(t_d, run=False):
         continuous=hobs,
     )
 
+    # compute the value (amplitude) of the sin wave at the for each sample
+    y = 150*np.sin(2 * np.pi * f * (x / fs)) - 300
+
+    rec_data = {}
+    for kper,ra in t.wel.stress_period_data.data.items():
+        df = pd.DataFrame.from_records(ra)
+        df.q = y[kper]
+        rec_data[kper] = df.values.tolist()
+
     wel = flopy.mf6.ModflowGwfwel(
         gwf,
-        stress_period_data = t.wel.stress_period_data.get_data(),
+        stress_period_data = rec_data,
         save_flows=True,
     )
+
+    y = 250 * np.sin(2 * np.pi * f * (x / fs)) + 500
+
+    rec_data = {}
+
+    for kper in range(nper):
+        rec_data[kper] = [[0,'inflow',y[kper]]]
 
     sfr = flopy.mf6.ModflowGwfsfr(
         gwf,
         unit_conversion=86400.,
         nreaches=120,
         packagedata=t.sfr.packagedata.get_data(),
-        perioddata=t.sfr.perioddata.get_data(),
+        perioddata=rec_data,
         connectiondata=t.sfr.connectiondata.get_data(),
         save_flows=True,
         obs_filerecord='sfr.obs',
@@ -218,11 +241,13 @@ def prep_truth_model(t_d, run=False):
     sgm_str = "1.77, 1.60, 1.77"  # Specific gravity of moist soils (unitless)
     sgs_str = "2.06, 1.94, 2.06"  # Specific gravity of saturated soils (unitless)
     cg_theta_str = "0.32, 0.45, 0.32"  # Coarse-grained material porosity (unitless)
-    cg_ske_str = "0.005, 0.01, 0.005"  # Elastic specific storage ($1/m$)
+    cg_ske_str = "0.00005, 0.0003, 0.00005"  # Elastic specific storage ($1/m$)
+    ssv_cv_str = "0.0003, 0.0003, 0.0003"  #  initial inelastic specific storage ($1/m$)
+    ssv_cr_str = "0.00005, 0.0003, 0.00005" # initial Elastic specific storage ($1/m$)
     ib_thick_str = "1., 1., 1."  # Interbed thickness ($m$)
-    ib_theta = 0.45  # Interbed initial porosity (unitless)
-    ib_cr = 0.01  # Interbed recompression index (unitless)
-    ib_cv = 0.25  # Interbed compression index (unitless)
+    ib_theta = 0.45  # Interbed initial porosity 0.0003(unitless)
+    # ib_cr = 0.01  # Interbed recompression index (unitless)
+    # ib_cv = 0.25  # Interbed compression index (unitless)
     stress_offset = 0.0  # Initial preconsolidation stress offset ($m$)
 
     # parse strings into tuples
@@ -230,7 +255,10 @@ def prep_truth_model(t_d, run=False):
     sgs = [float(value) for value in sgs_str.split(",")]
     cg_theta = [float(value) for value in cg_theta_str.split(",")]
     cg_ske = [float(value) for value in cg_ske_str.split(",")]
+    ssv_cv = [float(value) for value in ssv_cv_str.split(",")]
+    ssv_cr = [float(value) for value in ssv_cr_str.split(",")]
     ib_thick = [float(value) for value in ib_thick_str.split(",")]
+
 
     # create interbed package data
     icsubno = 0
@@ -249,11 +277,11 @@ def prep_truth_model(t_d, run=False):
                         stress_offset,
                         ib_thick[k],
                         1.0,
-                        ib_cv,
-                        ib_cr,
+                        ssv_cv[k],
+                        ssv_cr[k],
                         ib_theta,
-                        999.0,
-                        999.0,
+                        0.001,
+                        0,
                         boundname,
                     ]
                     csub_pakdata.append(ib_lst)
@@ -271,14 +299,15 @@ def prep_truth_model(t_d, run=False):
             gwf,
             # print_input=True,
             save_flows=True,
+            head_based = False,
             compaction_filerecord = 'truth.cmp',
             compaction_elastic_filerecord = 'truth.cec',
             compaction_inelastic_filerecord = 'truth.cnc',
             compaction_interbed_filerecord = 'truth.cic',
             compaction_coarse_filerecord = 'truth.ccc',
             zdisplacement_filerecord = 'truth.zbz',
-            compression_indices=True,
-            update_material_properties=False,
+            specified_initial_preconsolidation_stress=True,
+            compression_indices=False,
             boundnames=True,
             ninterbeds=len(csub_pakdata),
             sgm=sgm,
@@ -384,10 +413,12 @@ def setup_run_truth_pst(t_d, num_reals = 100):
             "npf_k33_": [0.2, 5, 1e-7, 500],
             "sto_sy_": [0.5, 2, 0.01, 0.25],
             "recharge_": [0.5, 2, 0, 0.1],
-            "sgs_": [0.5, 2, 0.01, 10],
-            "sgm_": [.5, 2, 0.01, 10.],
-            "cg_ske_": [.5, 2, 1.0e-7, 3.0e-5],
-            "cg_theta_": [0.25, 1.75, 0.01, 0.4]}
+            "cg_ske_": [0.1, 10., 0.000001, 0.001],
+            # "ssv_cv":  [0.1, 10., 0.0001, 0.01], #these are conductance-style pars
+            # "ib_theta_": [0.25, 1.75, 0.10, 0.45], #these are conductance-style pars
+            # ib_thick_
+            "cg_theta_": [0.25, 1.75, 0.01, 0.3]}
+    #interbed thickess, inelastic Ss, interbed porosity are all conductance style pars (not array)
 
     # use the idomain array for masking parameter locations
     try:
@@ -492,6 +523,14 @@ def setup_run_truth_pst(t_d, num_reals = 100):
                           upper_bound=10, lower_bound=0.1,  # don't need ult_bounds because it is a single multiplier
                           datetime=flow_dts[kper],  # this places the parameter value on the "time axis"
                           geostruct=temporal_gs)
+
+    # add grid-scale parameters for CSUB interbed thickness
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ibt",
+                      pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=2.,
+                      lower_bound=0.5, par_type="grid", ult_ub=10., ult_lb=0.1)
+
+
+
 
     # add model run command
     pf.mod_sys_cmds.append("mf6")
@@ -694,10 +733,10 @@ def invest():
     # cbb = flopy.utils.binaryfile.CellBudgetFile(os.path.join('daily_model_files_sub','truth.cbb'))
     # cbb = cbb.list_records()
 
-    cmp = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','CSub_Delay.csub_cmpct'), text='CSUB-COMPACTION')
+    cmp = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','truth.cmp'), text='CSUB-COMPACTION')
     # zbz = cmp.list_records()
 
-    zbz = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','truth.csub_z_dis'), text='CSUB-ZDISPLACE')
+    zbz = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','truth.zbz'), text='CSUB-ZDISPLACE')
     # zbz = zbz.list_records()
     zbz = zbz.get_alldata()
 
@@ -705,6 +744,10 @@ def invest():
     # plt.show()
 
     plt.plot(zbz[:,0,10,10])
+    # zbz[zbz>1000]='nan'
+    # zbz[zbz < 0] = 'nan'
+    # zbz = np.log10(zbz)
+    # plt.imshow(zbz[300,0,:,:])
     plt.show()
 
 
@@ -1093,7 +1136,7 @@ def condor_submit(template_ws, pstfile, conda_zip='geopy38.tar.gz', subfile='con
     return int(jobid)
 
 if __name__ == "__main__":
-    # prep_truth_model('daily_model_files_org', run=True)
-    prep_simple_model('monthly_model_files_org', run=True)
+    prep_truth_model('daily_model_files_org', run=True)
+    # prep_simple_model('monthly_model_files_org', run=True)
     # setup_run_truth_pst('daily_model_files_sub', num_reals = 100)
     # invest()
