@@ -156,8 +156,8 @@ def prep_truth_model(t_d, run=False):
         gwf,
         iconvert=[1,0,0],
         ss=0.0,
-        sy=0.02,
-        transient={0: True},
+        sy=[0.1,0.25,0.1],
+        transient={0: False, 1: True},
         save_flows=True,
     )
 
@@ -306,7 +306,7 @@ def prep_truth_model(t_d, run=False):
             compaction_interbed_filerecord = 'truth.cic',
             compaction_coarse_filerecord = 'truth.ccc',
             zdisplacement_filerecord = 'truth.zbz',
-            specified_initial_preconsolidation_stress=True,
+            specified_initial_preconsolidation_stress=False,
             compression_indices=False,
             boundnames=True,
             ninterbeds=len(csub_pakdata),
@@ -411,7 +411,7 @@ def setup_run_truth_pst(t_d, num_reals = 100):
 
     tags = {"npf_k_": [0.2, 5., 1e-7, 500],
             "npf_k33_": [0.2, 5, 1e-7, 500],
-            "sto_sy_": [0.5, 2, 0.01, 0.25],
+            "sto_sy": [0.5, 2, 0.01, 0.25],
             "recharge_": [0.5, 2, 0, 0.1],
             "cg_ske_": [0.1, 10., 0.000001, 0.001],
             # "ssv_cv":  [0.1, 10., 0.0001, 0.01], #these are conductance-style pars
@@ -438,6 +438,7 @@ def setup_run_truth_pst(t_d, num_reals = 100):
 
         # make sure each array file in nrow X ncol dimensions (not wrapped)
         for arr_file in arr_files:
+            print(arr_file)
             arr = np.loadtxt(os.path.join(template_ws, arr_file)).reshape(ib.shape)
             np.savetxt(os.path.join(template_ws, arr_file), arr, fmt="%15.6E")
 
@@ -524,16 +525,39 @@ def setup_run_truth_pst(t_d, num_reals = 100):
                           datetime=flow_dts[kper],  # this places the parameter value on the "time axis"
                           geostruct=temporal_gs)
 
-    # add grid-scale parameters for CSUB interbed thickness
+    # # add grid-scale parameters for CSUB interbed thickness
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_thk",
+    #                   pargp="csub_thk", index_cols=[0, 1, 2, 3], use_cols=[6], upper_bound=2.,
+    #                   lower_bound=0.5, par_type="grid", ult_ubound=10., ult_lbound=0.1)
+
+    # add grid-scale parameters for CSUB interbed porosity
     pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ibt",
-                      pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=2.,
-                      lower_bound=0.5, par_type="grid", ult_ub=10., ult_lb=0.1)
+                      pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[10], upper_bound=2.,
+                      lower_bound=0.5, par_type="grid", ult_ubound=.45, ult_lbound=0.01)
 
+    # add grid-scale parameters for CSUB interbed inelastic Ss
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
+                      pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
 
+    # add grid-scale parameters for CSUB interbed elastic Ss
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
+                      pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
+
+    # add grid-scale parameters for CSUB interbed K33
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_kv",
+                      pargp="csub_kv", index_cols=[0, 1, 2, 3], use_cols=[11], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.1, ult_lbound=0.00001)
 
 
     # add model run command
     pf.mod_sys_cmds.append("mf6")
+
+    pf.extra_py_imports.append("shutil")
+    pf.extra_py_imports.append("time")
+    pf.extra_py_imports.append("flopy")
+    pf.extra_py_imports.append("platform")
 
     # build pest control file
     pst = pf.build_pst('freyberg.pst')
@@ -865,7 +889,7 @@ def prep_simple_model(t_d, run=False):
         gwf,
         iconvert=t.npf.icelltype.array,
         ss=0.0,
-        sy=t.sto.sy.array,
+        sy=t.sto.sy.array[0],
         transient={0: True},
         save_flows=True,
     )
@@ -1136,7 +1160,7 @@ def condor_submit(template_ws, pstfile, conda_zip='geopy38.tar.gz', subfile='con
     return int(jobid)
 
 if __name__ == "__main__":
-    prep_truth_model('daily_model_files_org', run=True)
+    # prep_truth_model('daily_model_files_org', run=True)
     # prep_simple_model('monthly_model_files_org', run=True)
-    # setup_run_truth_pst('daily_model_files_sub', num_reals = 100)
+    setup_run_truth_pst('daily_model_files_sub', num_reals = 10)
     # invest()
