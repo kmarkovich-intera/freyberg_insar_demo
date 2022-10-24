@@ -3,11 +3,10 @@
 #build pst for complex model, add csub pars, draw one realization, and run it.
 # the heads/flows will be assimilated in the simple model and recharge will be the truth (spatial and temporal)
 
-#first build pst to do traditional DA with heads and lower K
-# (it should adjust the tmp recharge pars lower, and maybe also adjust spatial rech)
+#first build pst to do traditional DA with heads
 
-#then build pst to do traditional DA with heads and higher K
-# (it should adjust the tmp recharge pars higher, and maybe also adjust spatial rech)
+#then build pst to do traditional DA with heads and streamflow obs
+# we should have a better constraint on R/K, but not necessarily on spatial/temporal recharge
 
 #then add insar values to DA and show spatial/temporal advantage
 
@@ -217,6 +216,7 @@ def prep_truth_model(t_d, run=False):
 
     for kper in range(nper):
         rec_data[kper] = [[0,'inflow',y[kper]]]
+
 
     sfr = flopy.mf6.ModflowGwfsfr(
         gwf,
@@ -594,16 +594,55 @@ def setup_run_truth_pst(t_d, num_reals = 100):
 
 def build_localizer(t_d):
     #make sure obs inform the right temporal pars
-    #assume all obs (heads, streamflow, and insar) can inform all static props
+    #assume hds and streamflow can't inform porosity pars
+    
     pst = pyemu.Pst(os.path.join(t_d, "freyberg.pst"))
-    par = pst.parameter_data.loc[pst.adj_par_names, :]
+    # get par data
+    par = pst.parameter_data
+    par.inst = par.inst.astype(int)
+    # get obs data
+    obs = pst.observation_data
+    obs.time = obs.time.astype(float)
+    # temporal units are different in obs and par:
+    par.inst.unique(), obs.time.unique()
+
+    rpar = par.loc[par.parnme.str.contains("recharge"), :]
+    rpar = rpar.loc[rpar.ptype == "cn", :]
+    par.loc[rpar.parnme, "inst"] = rpar.parnme.apply(lambda x: int(x.split("tcn")[0].split('_')[-1]) - 1)
+
+    # add a column for each stress period;
+    # we already have spd values assocaited to paranetemr names,
+    # so we will use this to associate parameters to observations in time
+    times = obs.time.unique()
+    times.sort()
+    for kper, time in enumerate(times):
+        par.loc[par.inst == int(kper), 'time'] = time
+    par.loc[rpar.parnme, ["inst", "time"]]
+
+    # static parameters; these parameters will all be informed by historic obsevration data
+    prefixes = ['npf', 'sto', 'icstrt', 'ghb', 'sfrcondgr', 'sfrcondcn', ]
+    static_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    loc_matrix_cols = static_pargps.copy()
+
+    prefixes = ['csub_ibt', 'cg_theta']
+    dont_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    loc_matrix_cols.extend(dont_pargps)
+
+    # temporal pars; parameters in the past cannot be informed by observations in the future
+    prefixes = ['wel', 'rch', 'sfrgr']
+    temp_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    temporal_pars = par.loc[par.apply(lambda x: "gr" not in x.parnme and "pp" not in x.parnme
+                                                and x.pargp in temp_pargps, axis=1), :].copy()
+    loc_matrix_cols.extend(temporal_pars.parnme.tolist())
+
+
     obs = pst.observation_data.loc[pst.nnz_obs_names, :]
     hobs = obs.loc[obs.oname == "head", "obsnme"].values
     assert hobs.shape[0] > 0
 
     pargps = par.pargp.unique()
     pargps.sort()
-    tpar_tags = ["sgs", "sgm", "cg_ske", "cg_theta"]
+    tpar_tags = ["csub_ibt", "cg_theta"]
     tpargps = []
     for pargp in pargps:
         is_t = False
@@ -632,8 +671,8 @@ def build_localizer(t_d):
     df.to_csv(os.path.join(t_d, "localizer.csv"))
     pst.pestpp_options["ies_localizer"] = "localizer.csv"
     pst.control_data.noptmax = -2
-    pst.write(os.path.join(t_d, "lisbon.pst"), version=2)
-    pyemu.os_utils.run("pestpp-ies lisbon.pst", cwd=t_d)
+    pst.write(os.path.join(t_d, "freyberg.pst"), version=2)
+    pyemu.os_utils.run("pestpp-ies freyberg.pst", cwd=t_d)
 
 def map_complex_to_simple_bat(c_d,b_d,real_idx):
     """map the daily model outputs to the monthly model observations
@@ -698,13 +737,9 @@ def map_complex_to_simple_bat(c_d,b_d,real_idx):
             obs.loc[kobs.obsnme[1:13],"weight"] = 2.0
 
     # setup a template dir for this complex model realization
-    t_d = b_d + "_{0}".format(real_idx)
-    if os.path.exists(t_d):
-        shutil.rmtree(t_d)
-    shutil.copytree(b_d,t_d)
+    t_d = b_d
     bpst.write(os.path.join(t_d,"freyberg.pst"),version=2)
     return t_d
-
 
 def run_ies(tmp_ws, m_d="master_ies", num_workers=10, num_reals=30, noptmax=-1, drop_conflicts=True,
                 port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=None,
@@ -832,14 +867,15 @@ def prep_simple_model(t_d, run=False):
     if os.path.exists(new_d):
         shutil.rmtree(new_d)
 
-    # # fix the wel flux files
+    # # # fix the wel flux files
     # wel_files = [f for f in os.listdir(t_d) if ".wel_stress_period_data" in f]
-    # wel_files = {int(f.split(".")[1].split("_")[-1]): pd.read_csv(os.path.join(t_d, f), header=None,
-    #                                                               names=["l", "r", "c", "flux"]) for f in wel_files}
-    #
-    # for sp, df in wel_files.items():
-    #     df.to_csv(os.path.join(t_d, "freyberg_csub.wel_stress_period_data_{0}.txt".format(sp)), index=False, header=False,
-    #               sep=" ")
+    # for wel_file in wel_files:
+    #     sp = wel_file.split('_')[-1].split('.')[0]
+    #     df = pd.read_csv(os.path.join(t_d, wel_file), header=None, names=["l", "r", "c", "flux"])
+    #     df = df.astype({"l": int, "r": int, "c": int, "flux": np.float16})
+    #     df.to_csv(os.path.join(t_d, "freyberg6.wel_stress_period_data_{0}.txt".format(sp)), index=False,
+    #               header=False,  sep=" ")
+
 
     #load model
     sim = flopy.mf6.MFSimulation.load(sim_ws=t_d)
@@ -860,7 +896,7 @@ def prep_simple_model(t_d, run=False):
     )
     flopy.mf6.ModflowIms(
         new_sim,
-        complexity = 'complex',
+        complexity = 'complex',continue_=True,
     )
     gwf = flopy.mf6.ModflowGwf(
         new_sim, modelname=sim_name, save_flows=True, newtonoptions="newton", print_flows=False,
@@ -882,15 +918,15 @@ def prep_simple_model(t_d, run=False):
     flopy.mf6.ModflowGwfnpf(
         gwf,
         icelltype=t.npf.icelltype.array,
-        k=t.npf.k.array,
-        k33 = t.npf.k33.array
+        k=t.npf.k.array/10,
+        k33 = t.npf.k33.array/10
     )
     flopy.mf6.ModflowGwfsto(
         gwf,
         iconvert=t.npf.icelltype.array,
         ss=0.0,
-        sy=t.sto.sy.array[0],
-        transient={0: True},
+        sy=t.sto.sy.array,
+        transient={0: False, 1: True},
         save_flows=True,
     )
 
@@ -898,7 +934,7 @@ def prep_simple_model(t_d, run=False):
     files = [f for f in os.listdir(t_d) if ".rch" in f.lower() and f.endswith(".txt")]
     assert len(files) > 0
     for f in files:
-        arr = np.loadtxt(os.path.join(t_d, f))
+        arr = np.ones((nrow, ncol)) * 0.00001
         sp = int(f.split(".")[1].split("_")[-1])
         rec_data[(sp - 1)] = arr
 
@@ -922,18 +958,30 @@ def prep_simple_model(t_d, run=False):
         continuous=hobs,
     )
 
+
+    rec_data = {}
+    for kper,ra in t.wel.stress_period_data.data.items():
+        df = pd.DataFrame.from_records(ra)
+        df.q = -300
+        rec_data[kper] = df.values.tolist()
+
     wel = flopy.mf6.ModflowGwfwel(
         gwf,
-        stress_period_data = t.wel.stress_period_data.get_data(),
+        stress_period_data = rec_data,
         save_flows=True,
     )
+
+    rec_data = {}
+
+    for kper in range(nper):
+        rec_data[kper] = [[0,'inflow',500]]
 
     sfr = flopy.mf6.ModflowGwfsfr(
         gwf,
         unit_conversion=86400.,
-        nreaches=120,
+        nreaches=40,
         packagedata=t.sfr.packagedata.get_data(),
-        perioddata=t.sfr.perioddata.get_data(),
+        perioddata=rec_data,
         connectiondata=t.sfr.connectiondata.get_data(),
         save_flows=True,
         obs_filerecord='sfr.obs',
@@ -948,14 +996,16 @@ def prep_simple_model(t_d, run=False):
     # inputs for csub
     gammaw = 9806.65  # Compressibility of water (Newtons/($m^3$)
     beta = 4.6612e-10  # Specific gravity of water (1/$Pa$)
-    sgm = 1.77 # Specific gravity of moist soils (unitless)
+    sgm = 1.77  # Specific gravity of moist soils (unitless)
     sgs = 2.06  # Specific gravity of saturated soils (unitless)
     cg_theta = 0.32  # Coarse-grained material porosity (unitless)
-    cg_ske = 0.005  # Elastic specific storage ($1/m$)
+    cg_ske = 0.00005  # Elastic specific storage ($1/m$)
+    ssv_cv = 0.0003  # initial inelastic specific storage ($1/m$)
+    ssv_cr = 0.00005  # initial Elastic specific storage ($1/m$)
     ib_thick = 1.  # Interbed thickness ($m$)
-    ib_theta = 0.45  # Interbed initial porosity (unitless)
-    ib_cr = 0.01  # Interbed recompression index (unitless)
-    ib_cv = 0.25  # Interbed compression index (unitless)
+    ib_theta = 0.45  # Interbed initial porosity 0.0003(unitless)
+    # ib_cr = 0.01  # Interbed recompression index (unitless)
+    # ib_cv = 0.25  # Interbed compression index (unitless)
     stress_offset = 0.0  # Initial preconsolidation stress offset ($m$)
 
     # create interbed package data
@@ -964,7 +1014,7 @@ def prep_simple_model(t_d, run=False):
     for i in range(nrow):
         for j in range(ncol):
             for k in range(nlay):
-                if t.dis.idomain.array[k,i,j] == 0:
+                if t.dis.idomain.array[k, i, j] == 0:
                     continue
                 else:
                     boundname = "{:02d}_{:02d}_{:02d}".format(k + 1, i + 1, j + 1)
@@ -973,48 +1023,48 @@ def prep_simple_model(t_d, run=False):
                         (k, i, j),
                         "nodelay",
                         stress_offset,
-                        ib_thick[k],
+                        ib_thick,
                         1.0,
-                        ib_cv,
-                        ib_cr,
+                        ssv_cv,
+                        ssv_cr,
                         ib_theta,
-                        999.0,
-                        999.0,
+                        0.001,
+                        0,
                         boundname,
                     ]
                     csub_pakdata.append(ib_lst)
                     icsubno += 1
 
     oc = flopy.mf6.ModflowGwfoc(
-            gwf,
-            budget_filerecord="simple.cbb",
-            head_filerecord="simple.hds",
-            saverecord=[("HEAD", "ALL"),("BUDGET", "ALL")],
-        )
-
+        gwf,
+        budget_filerecord="simple.cbb",
+        head_filerecord="simple.hds",
+        saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
+    )
 
     sub = flopy.mf6.ModflowGwfcsub(
-            gwf,
-            # print_input=True,
-            save_flows=True,
-            compaction_filerecord = 'simple.cmp',
-            compaction_elastic_filerecord = 'simple.cec',
-            compaction_inelastic_filerecord = 'simple.cnc',
-            compaction_interbed_filerecord = 'simple.cic',
-            compaction_coarse_filerecord = 'simple.ccc',
-            zdisplacement_filerecord = 'simple.zbz',
-            compression_indices=True,
-            update_material_properties=False,
-            boundnames=True,
-            ninterbeds=len(csub_pakdata),
-            sgm=sgm,
-            sgs=sgs,
-            cg_theta=cg_theta,
-            cg_ske_cr=cg_ske,
-            beta=beta,
-            gammaw=gammaw,
-            packagedata=csub_pakdata,
-        )
+        gwf,
+        # print_input=True,
+        save_flows=True,
+        head_based=False,
+        compaction_filerecord='simple.cmp',
+        compaction_elastic_filerecord='simple.cec',
+        compaction_inelastic_filerecord='simple.cnc',
+        compaction_interbed_filerecord='simple.cic',
+        compaction_coarse_filerecord='simple.ccc',
+        zdisplacement_filerecord='simple.zbz',
+        specified_initial_preconsolidation_stress=False,
+        compression_indices=False,
+        boundnames=True,
+        ninterbeds=len(csub_pakdata),
+        sgm=sgm,
+        sgs=sgs,
+        cg_theta=cg_theta,
+        cg_ske_cr=cg_ske,
+        beta=beta,
+        gammaw=gammaw,
+        packagedata=csub_pakdata,
+    )
 
 
     new_sim.set_all_data_external()
@@ -1159,8 +1209,319 @@ def condor_submit(template_ws, pstfile, conda_zip='geopy38.tar.gz', subfile='con
 
     return int(jobid)
 
+def setup_simple_pst(t_d, hds=True, strmflw = False, zdisp=False, num_reals = 100,):
+
+    if hds:
+        new_d = "tmp_pst_hds"
+    if strmflw:
+        new_d = new_d + "_sfr"
+    if zdisp:
+        new_d = new_d + "_zdsp"
+
+    # template_ws = "tmp_pst"
+    temp_model_ws = "temp"
+    if os.path.exists(temp_model_ws):
+        shutil.rmtree(temp_model_ws)
+    shutil.copytree(t_d, temp_model_ws)
+    prep_deps(temp_model_ws)
+
+    base_model_ws = None
+
+    # load flow model
+    flow_dir = os.path.join(temp_model_ws)
+    sim = flopy.mf6.MFSimulation.load(sim_ws=flow_dir, exe_name="mf6")
+    m = sim.get_model("freyberg_csub")
+
+    # instantiate PEST container
+    pf = pyemu.utils.PstFrom(original_d=temp_model_ws, new_d=new_d,
+                             remove_existing=True,
+                             longnames=True, spatial_reference=m.modelgrid,
+                             zero_based=False, start_datetime="1-1-2022")
+
+    prep_deps(new_d)
+
+    flow_dts = pd.to_datetime("1-1-2022") + pd.to_timedelta(np.cumsum(sim.tdis.perioddata.array["perlen"]), unit="d")
+
+    tmp_files = []
+    files = [os.path.join(os.path.split(new_d)[-1], f) for f in os.listdir(new_d) if
+             f.split(".")[-1] in ["hds", "cbb", "cec", "ccc", "cic", "cnc", "zbz"]]
+    files.sort()
+    for f in files:
+        pf.tmp_files.append(f)
+
+    # add obs
+    df = pd.read_csv(os.path.join(new_d, "heads.csv"), index_col=0)
+    pf.add_observations("heads.csv", index_cols=['time'], use_cols=list(df.columns), obsgp="hds",
+                        prefix="hds", ofile_sep=",")
+
+    # pf.add_py_function('workflow.py', 'postprocess()', is_pre_cmd=False)
+
+    df = pd.read_csv(os.path.join(new_d, "sfr.csv"), index_col=0)
+    pf.add_observations("sfr.csv", index_cols=["time"], use_cols=df.columns.tolist(), ofile_sep=",",
+                        obsgp="flow", prefix="sfr")
+
+    # # add observations for the simulated rech values
+    # pf.add_py_function("workflow.py","extract_rech()", is_pre_cmd=False)
+    # test_extract_rech(template_ws)
+    # prefix = "rech_k:1"
+    # pf.add_observations('rech.txt', prefix=prefix, obsgp=prefix)
+
+    # add observations for simulated hds states
+    pf.add_py_function("workflow.py", "extract_z_disp_obs()", is_pre_cmd=False)
+    fnames = test_extract_z_disp_obs(new_d)
+    for k, fname in enumerate(fnames):
+        prefix = "zdisp_k:{0}".format(k)
+        pf.add_observations(fname, prefix=prefix, obsgp=prefix)
+
+    # for tag in ["hds"]:
+    #     arrs = [f for f in os.listdir(template_ws) if f.startswith(tag) and f.endswith(".txt")]
+    #     arrs.sort()
+    #     print(arrs)
+    #     for arr in arrs:
+    #         pf.add_observations(arr, prefix=arr.split('.')[0].replace("_", ""),
+    #                             obsgp=arr.split('.')[0].replace("_", ""))
+
+    # the geostruct object for grid-scale parameters
+    grid_v = pyemu.geostats.ExpVario(contribution=1.0, a=500)
+    grid_gs = pyemu.geostats.GeoStruct(variograms=grid_v)
+
+    # the geostruct object for pilot-point-scale parameters
+    pp_v = pyemu.geostats.ExpVario(contribution=1.0, a=2000)
+    pp_gs = pyemu.geostats.GeoStruct(variograms=pp_v)
+
+    # the geostruct for recharge grid-scale parameters
+    rch_v = pyemu.geostats.ExpVario(contribution=1.0, a=1000)
+    rch_gs = pyemu.geostats.GeoStruct(variograms=rch_v)
+
+    # the geostruct for temporal correlation
+    temporal_gs = pyemu.geostats.GeoStruct(variograms=pyemu.geostats.ExpVario(contribution=1.0, a=30))
+
+    pp_cells = 5
+
+    tags = {"npf_k_": [0.2, 5., 1e-7, 500],
+            "npf_k33_": [0.2, 5, 1e-7, 500],
+            "sto_sy": [0.5, 2, 0.01, 0.25],
+            "recharge_": [0.5, 2, 0, 0.1],
+            "cg_ske_": [0.1, 10., 0.000001, 0.001],
+            # "ssv_cv":  [0.1, 10., 0.0001, 0.01], #these are conductance-style pars
+            # "ib_theta_": [0.25, 1.75, 0.10, 0.45], #these are conductance-style pars
+            # ib_thick_
+            "cg_theta_": [0.25, 1.75, 0.01, 0.3]}
+    # interbed thickess, inelastic Ss, interbed porosity are all conductance style pars (not array)
+
+    # use the idomain array for masking parameter locations
+    try:
+        ib = m.dis.idomain.array
+    except:
+        ib = m.dis.idomain
+
+    # loop over each tag, bound info pair
+    for tag, bnd in tags.items():
+        lb, ub = bnd[0], bnd[1]
+        # find all array based files that have the tag in the name
+        arr_files = [f for f in os.listdir(new_d) if tag in f and f.endswith(".txt")]
+
+        if len(arr_files) == 0:
+            print("warning: no array files found for ", tag)
+            continue
+
+        # make sure each array file in nrow X ncol dimensions (not wrapped)
+        for arr_file in arr_files:
+            print(arr_file)
+            arr = np.loadtxt(os.path.join(new_d, arr_file)).reshape(ib.shape)
+            np.savetxt(os.path.join(new_d, arr_file), arr, fmt="%15.6E")
+
+        # if this is the recharge tag
+        if "rch" in tag:
+            # add one set of grid-scale parameters for all files
+            pf.add_parameters(filenames=arr_files, par_type="grid", par_name_base="rch_gr",
+                              pargp="rch_gr", zone_array=ib, upper_bound=ub, lower_bound=lb,
+                              geostruct=rch_gs)
+
+            # add one constant parameter for each array, and assign it a datetime
+            # so we can work out the temporal correlation
+            for arr_file in arr_files:
+                arr = np.loadtxt(os.path.join(new_d, arr_file))
+                print(arr_file, arr.mean(), arr.std())
+                uub = arr.mean() * ub
+                llb = arr.mean() * lb
+                if "daily" in t_d.lower():
+                    uub *= 5
+                    llb /= 5
+                kper = int(arr_file.split('.')[1].split('_')[-1]) - 1
+                pf.add_parameters(filenames=arr_file, par_type="constant", par_name_base=arr_file.split('.')[1] + "_cn",
+                                  pargp="rch_const", zone_array=ib, upper_bound=uub, lower_bound=llb,
+                                  par_style="direct")
+
+        # otherwise...
+        else:
+            # for each array add both grid-scale and pilot-point scale parameters
+            for arr_file in arr_files:
+                pf.add_parameters(filenames=arr_file, par_type="grid", par_name_base=arr_file.split('.')[1] + "_gr",
+                                  pargp=arr_file.split('.')[1] + "_gr", zone_array=ib, upper_bound=ub, lower_bound=lb,
+                                  geostruct=grid_gs)
+                pf.add_parameters(filenames=arr_file, par_type="constant", par_name_base=arr_file.split('.')[1] + "_cn",
+                                  pargp=arr_file.split('.')[1] + "_cn", zone_array=ib, upper_bound=ub, lower_bound=lb,
+                                  geostruct=grid_gs)
+                pf.add_parameters(filenames=arr_file, par_type="pilotpoints",
+                                  par_name_base=arr_file.split('.')[1] + "_pp",
+                                  pargp=arr_file.split('.')[1] + "_pp", zone_array=ib, upper_bound=ub, lower_bound=lb,
+                                  pp_space=pp_cells, geostruct=pp_gs)
+
+    # get all the list-type files associated with the wel package
+    list_files = [f for f in os.listdir(t_d) if "freyberg_csub.wel_stress_period_data_" in f and f.endswith(".txt")]
+    # for each wel-package list-type file
+    for list_file in list_files:
+        kper = int(list_file.split(".")[1].split('_')[-1]) - 1
+        # add spatially constant, but temporally correlated parameter
+        pf.add_parameters(filenames=list_file, par_type="constant", par_name_base="twel_mlt_{0}".format(kper),
+                          pargp="twel_mlt".format(kper), index_cols=[0, 1, 2], use_cols=[3],
+                          upper_bound=5, lower_bound=0.2, datetime=flow_dts[kper])
+
+    lb, ub = .2, 5
+    if "daily" in t_d.lower():
+        lb, ub = .1, 10
+    # add temporally indep, but spatially correlated grid-scale parameters, one per well
+    pf.add_parameters(filenames=list_files, par_type="grid", par_name_base="wel_grid",
+                      pargp="wel_grid", index_cols=[0, 1, 2], use_cols=[3],
+                      upper_bound=ub, lower_bound=lb)
+
+    # add grid-scale parameters for SFR reach conductance.  Use layer, row, col and reach
+    # number in the parameter names
+    pf.add_parameters(filenames="freyberg_csub.sfr_packagedata.txt", par_name_base="sfr_rhk",
+                      pargp="sfr_rhk", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=20.,
+                      lower_bound=0.05, par_type="grid")
+
+    # SFR inflow
+    files = [f for f in os.listdir(new_d) if "sfr_perioddata" in f and f.endswith(".txt")]
+    sp = [int(f.split(".")[1].split('_')[-1]) for f in files]
+    d = {s: f for s, f in zip(sp, files)}
+    sp.sort()
+    files = [d[s] for s in sp]
+    print(files)
+    for f in files:
+        # get the stress period number from the file name
+        kper = int(f.split('.')[1].split('_')[-1]) - 1
+        # add the parameters
+        pf.add_parameters(filenames=f,
+                          index_cols=[0],  # reach number
+                          use_cols=[2],  # columns with parameter values
+                          par_type="grid",
+                          par_name_base="sfrgr",
+                          pargp="sfrgr",
+                          upper_bound=10, lower_bound=0.1,  # don't need ult_bounds because it is a single multiplier
+                          datetime=flow_dts[kper],  # this places the parameter value on the "time axis"
+                          geostruct=temporal_gs)
+
+    # # add grid-scale parameters for CSUB interbed thickness
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_thk",
+    #                   pargp="csub_thk", index_cols=[0, 1, 2, 3], use_cols=[6], upper_bound=2.,
+    #                   lower_bound=0.5, par_type="grid", ult_ubound=10., ult_lbound=0.1)
+
+    # add grid-scale parameters for CSUB interbed porosity
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ibt",
+                      pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[10], upper_bound=2.,
+                      lower_bound=0.5, par_type="grid", ult_ubound=.45, ult_lbound=0.01)
+
+    # add grid-scale parameters for CSUB interbed inelastic Ss
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
+                      pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
+
+    # add grid-scale parameters for CSUB interbed elastic Ss
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
+                      pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
+
+    # add grid-scale parameters for CSUB interbed K33
+    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_kv",
+                      pargp="csub_kv", index_cols=[0, 1, 2, 3], use_cols=[11], upper_bound=10.,
+                      lower_bound=0.1, par_type="grid", ult_ubound=0.1, ult_lbound=0.00001)
+
+    # add model run command
+    pf.mod_sys_cmds.append("mf6")
+
+    pf.extra_py_imports.append("shutil")
+    pf.extra_py_imports.append("time")
+    pf.extra_py_imports.append("flopy")
+    pf.extra_py_imports.append("platform")
+
+    # build pest control file
+    pst = pf.build_pst('freyberg.pst')
+    par = pst.parameter_data
+
+    # draw from the prior and save the ensemble in binary format
+    pe = pf.draw(num_reals, use_specsim=True)
+    pe.enforce()
+    pe.to_binary(os.path.join(new_d, "prior_pe.jcb"))
+
+    # write the control file
+    pst.write(os.path.join(pf.new_d, "freyberg.pst"), version=2)
+
+    # run with noptmax = 0
+    pyemu.os_utils.run("{0} freyberg.pst".format(
+        os.path.join("pestpp-ies")), cwd=pf.new_d)
+
+    # make sure it ran
+    res_file = os.path.join(pf.new_d, "freyberg.base.rei")
+    assert os.path.exists(res_file), res_file
+    pst.set_res(res_file)
+    print(pst.phi)
+
+    # define what file has the prior parameter ensemble
+    pst.pestpp_options["ies_par_en"] = "prior_pe.jcb"
+    pst.pestpp_options["save_binary"] = True
+
+    #now for some obs and weights!
+    pst.observation_data.weight = 0
+
+    map_complex_to_simple_bat('daily_model_files_sub','monthly_model_files_sub', 0)
+    obs = pst.observation_data
+
+    if strmflw==False:
+        kobs = obs.loc[obs.obsnme.str.contains('gage'), :].copy()
+        kobs.loc[:, "time"] = kobs.time.apply(float)
+        kobs.sort_values(by="time", inplace=True)
+        obs.loc[kobs.obsnme, "weight"] = 0.0
+
+    if zdisp==False:
+        kobs = obs.loc[obs.obsnme.str.contains('zdisp'), :].copy()
+        kobs.loc[:, "time"] = kobs.time.apply(float)
+        kobs.sort_values(by="time", inplace=True)
+        obs.loc[kobs.obsnme, "weight"] = 0.0
+
+
+    pst.pestpp_options["ies_localizer"] = "localizer.csv"
+    pst.write(os.path.join(new_d, "freyberg.pst"))
+
+
+
 if __name__ == "__main__":
+    # invest()
+
+    ##prep model and pst
     # prep_truth_model('daily_model_files_org', run=True)
     # prep_simple_model('monthly_model_files_org', run=True)
-    setup_run_truth_pst('daily_model_files_sub', num_reals = 10)
-    # invest()
+
+    ##run truth model
+    # setup_run_truth_pst('daily_model_files_sub', num_reals = 10)
+
+    ##run first scenario
+    setup_simple_pst('monthly_model_files_sub', hds=True)
+    run_ies('tmp_pst_hds', m_d="master_ies_hds", num_workers=10, num_reals=200, noptmax=3, drop_conflicts=True,
+                port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
+                use_condor=False)
+    #postprocess
+
+    ##run second scenario
+    # setup_simple_pst('monthly_model_files_sub', hds=True, strmflw=True)
+    # run_ies('tmp_pst_hds_sfr', m_d="master_ies_hd_sfr", num_workers=8, num_reals=200, noptmax=3, drop_conflicts=True,
+    #             port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
+    #             use_condor=False)
+
+
+    ##run third scenario
+    # setup_simple_pst('monthly_model_files_sub', hds=True, strmflw=True, zdisp=True)
+    # run_ies('tmp_pst_hds_sfr_zdsp', m_d="master_ies_hds_sfr_zdsp", num_workers=8, num_reals=200, noptmax=3, drop_conflicts=True,
+    #             port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
+    #             use_condor=False)
