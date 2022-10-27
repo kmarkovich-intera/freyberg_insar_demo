@@ -91,6 +91,8 @@ def prep_deps(d):
         shutil.copytree(src_d, dest_d)
 
 
+
+
 def prep_truth_model(t_d, run=False):
 
     new_d = t_d.replace('_org', '_sub')
@@ -115,6 +117,13 @@ def prep_truth_model(t_d, run=False):
     nlay, nrow, ncol = t.dis.nlay.array, t.dis.nrow.array, t.dis.ncol.array
     hobs = t.head_obs.continuous.get_data()
     sobs = t.sfr_obs.continuous.get_data()
+
+    top = t.dis.top.array
+    top[top<0]='nan'
+    plt.imshow(top)
+    plt.colorbar()
+    plt.show()
+    exit()
 
     sim_name = 'freyberg_csub'
 
@@ -143,13 +152,14 @@ def prep_truth_model(t_d, run=False):
         idomain=t.dis.idomain.array,
     )
 
+
     flopy.mf6.ModflowGwfic(gwf, strt=t.ic.strt.array)
 
     flopy.mf6.ModflowGwfnpf(
         gwf,
         icelltype=[1,0,0],
-        k=[3,.3,30],
-        k33 = [.3,.03,3]
+        k=[30,.3,3],
+        k33 = [3,.03,.3]
     )
     flopy.mf6.ModflowGwfsto(
         gwf,
@@ -165,7 +175,7 @@ def prep_truth_model(t_d, run=False):
     f = 2  # the frequency of the signal
     x = np.arange(fs)  # the points on the x axis for plotting
     # compute the value (amplitude) of the sin wave at the for each sample
-    y = 0.0001*np.sin(2 * np.pi * f * (x / fs)) + 0.0001
+    y = 0.0005*np.sin(2 * np.pi * f * (x / fs)) + 0.0005
 
     rec_data = {}
     files = [f for f in os.listdir(t_d) if ".rch" in f.lower() and f.endswith(".txt")]
@@ -180,6 +190,7 @@ def prep_truth_model(t_d, run=False):
         recharge=rec_data,
         save_flows=True,
     )
+
 
     ghb = flopy.mf6.ModflowGwfghb(
         gwf,
@@ -196,12 +207,13 @@ def prep_truth_model(t_d, run=False):
     )
 
     # compute the value (amplitude) of the sin wave at the for each sample
-    y = 150*np.sin(2 * np.pi * f * (x / fs)) - 300
+    y = 5000 * np.sin(2 * np.pi * f * (x / fs)) - 10000
 
     rec_data = {}
     for kper,ra in t.wel.stress_period_data.data.items():
         df = pd.DataFrame.from_records(ra)
         df.q = y[kper]
+
         rec_data[kper] = df.values.tolist()
 
     wel = flopy.mf6.ModflowGwfwel(
@@ -216,7 +228,6 @@ def prep_truth_model(t_d, run=False):
 
     for kper in range(nper):
         rec_data[kper] = [[0,'inflow',y[kper]]]
-
 
     sfr = flopy.mf6.ModflowGwfsfr(
         gwf,
@@ -244,7 +255,7 @@ def prep_truth_model(t_d, run=False):
     cg_ske_str = "0.00005, 0.0003, 0.00005"  # Elastic specific storage ($1/m$)
     # ssv_cv_str = "0.0003, 0.0003, 0.0003"  #  initial inelastic specific storage ($1/m$)
     # sse_cr_str = "0.00005, 0.0003, 0.00005" # initial Elastic specific storage ($1/m$)
-    ib_thick_str = "1., 2.5, 1."  # Interbed thickness ($m$)
+    ib_thick_str = "1., 2.5, 8."  # Interbed thickness ($m$)
     ib_theta = 0.45  # Interbed initial porosity 0.0003(unitless)
     ib_cr = 0.01  # Interbed recompression index (unitless)
     ib_cv = 0.25  # Interbed compression index (unitless)
@@ -258,7 +269,6 @@ def prep_truth_model(t_d, run=False):
     # ssv_cv = [float(value) for value in ssv_cv_str.split(",")]
     # sse_cr = [float(value) for value in sse_cr_str.split(",")]
     ib_thick = [float(value) for value in ib_thick_str.split(",")]
-
 
     # create interbed package data
     icsubno = 0
@@ -277,8 +287,6 @@ def prep_truth_model(t_d, run=False):
                         stress_offset,
                         ib_thick[k],
                         1.0,
-                        # ssv_cv[k],
-                        # sse_cr[k],
                         ib_cv,
                         ib_cr,
                         ib_theta,
@@ -321,6 +329,34 @@ def prep_truth_model(t_d, run=False):
             packagedata=csub_pakdata,
         )
 
+    # sim = flopy.mf6.MFSimulation.load(sim_ws='monthly_model_files_org')
+    # m = sim.get_model()
+    # mib = m.dis.idomain.array
+    # mnlay, mnrow, mncol = m.dis.nlay.array, m.dis.nrow.array, m.dis.ncol.array
+    #
+    # opth = "csub.obs"
+    # csub_csv = opth + ".csv"
+    # obs = []
+    # for k in range(mnlay):
+    #     for i in range(mnrow):
+    #         for j in range(mncol):
+    #             if mib[k,i,j] < 1:
+    #                 pass
+    #             else:
+    #                 tag = "tc_k:{:02d}_i:{:02d}_j:{:02d}".format(k+1, i+1, j+1)
+    #                 obs.append(
+    #                     (
+    #                         tag,
+    #                         "compaction-cell",
+    #                         (k, (i*3)+1, (j*3)+1),
+    #                     )
+    #                 )
+    # orecarray = {csub_csv: obs}
+    #
+    # sub.obs.initialize(
+    #     filename=opth,
+    #     continuous=orecarray,
+    # )
 
     new_sim.set_all_data_external()
     new_sim.write_simulation()
@@ -373,18 +409,22 @@ def setup_run_truth_pst(t_d, num_reals = 100):
     pf.add_observations("sfr.csv", index_cols=["time"], use_cols=df.columns.tolist(), ofile_sep=",",
                         obsgp="flow", prefix="sfr")
 
+    df = pd.read_csv(os.path.join(template_ws, "csub.obs.csv"), index_col=0)
+    pf.add_observations("csub.obs.csv", index_cols=["time"], use_cols=df.columns.tolist(), ofile_sep=",",
+                        obsgp="tcmpct", prefix="tcmp")
+
     # # add observations for the simulated rech values
     # pf.add_py_function("workflow.py","extract_rech()", is_pre_cmd=False)
     # test_extract_rech(template_ws)
     # prefix = "rech_k:1"
     # pf.add_observations('rech.txt', prefix=prefix, obsgp=prefix)
 
-    # add observations for simulated hds states
-    pf.add_py_function("workflow.py", "extract_z_disp_obs()", is_pre_cmd=False)
-    fnames = test_extract_z_disp_obs(template_ws)
-    for k, fname in enumerate(fnames):
-        prefix = "zdisp_k:{0}".format(k)
-        pf.add_observations(fname, prefix=prefix, obsgp=prefix)
+    # # add observations for simulated hds states
+    # pf.add_py_function("workflow.py", "extract_z_disp_obs()", is_pre_cmd=False)
+    # fnames = test_extract_z_disp_obs(template_ws)
+    # for k, fname in enumerate(fnames):
+    #     prefix = "zdisp_k:{0}".format(k)
+    #     pf.add_observations(fname, prefix=prefix, obsgp=prefix)
 
     # for tag in ["hds"]:
     #     arrs = [f for f in os.listdir(template_ws) if f.startswith(tag) and f.endswith(".txt")]
@@ -605,7 +645,47 @@ def setup_run_truth_pst(t_d, num_reals = 100):
     pyemu.os_utils.run("pestpp-ies freyberg.pst", cwd=template_ws)
 
 def build_localizer(t_d):
-    #hds and streamflow can't inform porosity pars
+    #assume hds and streamflow can't inform porosity pars
+
+    pst = pyemu.Pst(os.path.join(t_d, "freyberg.pst"))
+    # get par data
+    par = pst.parameter_data
+    par.inst = par.inst.astype(int)
+    # get obs data
+    obs = pst.observation_data
+    obs.time = obs.time.astype(float)
+    # temporal units are different in obs and par:
+    par.inst.unique(), obs.time.unique()
+
+    rpar = par.loc[par.parnme.str.contains("recharge"), :]
+    rpar = rpar.loc[rpar.ptype == "cn", :]
+    par.loc[rpar.parnme, "inst"] = rpar.parnme.apply(lambda x: int(x.split("tcn")[0].split('_')[-1]) - 1)
+
+    # add a column for each stress period;
+    # we already have spd values assocaited to paranetemr names,
+    # so we will use this to associate parameters to observations in time
+    times = obs.time.unique()
+    times.sort()
+    for kper, time in enumerate(times):
+        par.loc[par.inst == int(kper), 'time'] = time
+    par.loc[rpar.parnme, ["inst", "time"]]
+
+    # static parameters; these parameters will all be informed by historic obsevration data
+    prefixes = ['npf', 'sto', 'icstrt', 'ghb', 'sfrcondgr', 'sfrcondcn', ]
+    static_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    loc_matrix_cols = static_pargps.copy()
+
+    prefixes = ['csub_ibt', 'cg_theta']
+    dont_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    loc_matrix_cols.extend(dont_pargps)
+
+    # temporal pars; parameters in the past cannot be informed by observations in the future
+    prefixes = ['wel', 'rch', 'sfrgr']
+    temp_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
+    temporal_pars = par.loc[par.apply(lambda x: "gr" not in x.parnme and "pp" not in x.parnme
+                                                and x.pargp in temp_pargps, axis=1), :].copy()
+    loc_matrix_cols.extend(temporal_pars.parnme.tolist())
+
 
     obs = pst.observation_data.loc[pst.nnz_obs_names, :]
     hobs = obs.loc[obs.oname == "hds", "obsnme"].values
@@ -762,6 +842,9 @@ def invest():
     # cbb = flopy.utils.binaryfile.CellBudgetFile(os.path.join('daily_model_files_sub','truth.cbb'))
     # cbb = cbb.list_records()
 
+    hds = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','truth.hds'))
+    hds = hds.get_alldata()
+
     cmp = flopy.utils.binaryfile.HeadFile(os.path.join('daily_model_files_sub','truth.cmp'), text='CSUB-COMPACTION')
     # zbz = cmp.list_records()
 
@@ -771,8 +854,17 @@ def invest():
 
     # plt.imshow(zbz[-1,0,:,:])
     # plt.show()
+    # print(zbz[-1,0,10,10])
+    # test = zbz[-1,1,10,10] + zbz[-1,2,10,10]
+    # print(test)
+    # exit()
 
-    plt.plot(zbz[:,0,10,10])
+    # plt.plot(zbz[:,0,10,10], 'k')
+    # plt.plot(zbz[:, 1, 10, 10], 'g')
+    # plt.plot(zbz[:, 2, 10, 10], 'r')
+    plt.plot(hds[:,0,10,10], 'k')
+    # plt.plot(zbz[:, 1, 10, 10], 'g')
+    # plt.plot(zbz[:, 2, 10, 10], 'r')
     # zbz[zbz>1000]='nan'
     # zbz[zbz < 0] = 'nan'
     # zbz = np.log10(zbz)
@@ -786,18 +878,46 @@ def invest():
     # print(contents)
 
 def extract_z_disp_obs():
+    hds = flopy.utils.HeadFile('truth.hds')
+    times = hds.get_times()
     hds = flopy.utils.HeadFile('truth.zbz', text='CSUB-ZDISPLACE')
-    arr = hds.get_data()
+    arr = hds.get_alldata()
+    oarr = []
     fnames = []
-    for i in range(1,len(arr)-1):
-        arr[i] = arr[i] - arr[i-1]
-    arr[0] = 0.
+    for i in range(0,len(arr)):
+        new_arr = np.sum(arr[i], axis=0)
+        oarr.append(new_arr)
 
-    for k, a in enumerate(arr):
-        fname = 'zdisp_' + str(k) + '.dat'
-        np.savetxt(fname, a, fmt='%15.6E')
-        fnames.append(fname)
-    return fnames
+    oarr = np.array(oarr)
+
+    # for i in range(1, len(oarr)):
+    #     oarr[i,:,:] = oarr[i,:,:] - oarr[i-1,:,:]
+
+
+    # for k, a in enumerate(arr):
+    #     fname = 'zdisp_' + str(k) + '.dat'
+    #     np.savetxt(fname, a, fmt='%15.6E')
+    #     fnames.append(fname)
+    # return fnames
+    m_d = os.path.join('..','monthly_model_files_sub')
+    sim = flopy.mf6.MFSimulation.load(sim_ws=m_d)
+    m = sim.get_model()
+    mib = m.dis.idomain.array
+    mnlay, mnrow, mncol = m.dis.nlay.array, m.dis.nrow.array, m.dis.ncol.array
+
+    csub_csv = "csub.obs.csv"
+    obs = pd.DataFrame(columns=['Time'])
+    obs['Time'] = times
+
+    for i in range(mnrow):
+        for j in range(mncol):
+            if mib[0,i,j] < 1:
+                pass
+            else:
+                tag = "tc_i:{:02d}_j:{:02d}".format(i+1, j+1)
+                obs[tag] = oarr[:,(i*3)+1,(j*3)+1] * 1000
+
+    obs.to_csv(csub_csv)
 
 def test_extract_z_disp_obs(t_d):
     cwd = os.getcwd()
@@ -871,6 +991,9 @@ def prep_simple_model(t_d, run=False):
     gwf = flopy.mf6.ModflowGwf(
         new_sim, modelname=sim_name, save_flows=True, newtonoptions="newton", print_flows=False,
     )
+
+    ib = t.dis.idomain.array
+
     flopy.mf6.ModflowGwfdis(
         gwf,
         nlay=nlay,
@@ -880,7 +1003,7 @@ def prep_simple_model(t_d, run=False):
         delc=t.dis.delc.array,
         top=t.dis.top.array,
         botm=t.dis.botm.array,
-        idomain=t.dis.idomain.array,
+        idomain=ib,
     )
 
     flopy.mf6.ModflowGwfic(gwf, strt=t.ic.strt.array)
@@ -1047,6 +1170,29 @@ def prep_simple_model(t_d, run=False):
         packagedata=csub_pakdata,
     )
 
+    opth = "csub.obs"
+    csub_csv = opth + ".csv"
+    obs = []
+    for k in range(nlay):
+        for i in range(nrow):
+            for j in range(ncol):
+                if ib[k,i,j] < 1:
+                    pass
+                else:
+                    tag = "tc_k:{:02d}_i:{:02d}_j:{:02d}".format(k+1, i+1, j+1)
+                    obs.append(
+                        (
+                            tag,
+                            "compaction-cell",
+                            (k, i, j),
+                        )
+                    )
+    orecarray = {csub_csv: obs}
+
+    sub.obs.initialize(
+        filename=opth,
+        continuous=orecarray,
+    )
 
     new_sim.set_all_data_external()
     new_sim.write_simulation()
@@ -1477,19 +1623,20 @@ def setup_simple_pst(t_d, hds=True, strmflw = False, zdisp=False, num_reals = 10
 
 if __name__ == "__main__":
     # invest()
+    # test_extract_z_disp_obs('daily_model_files_sub')
 
     ##prep model and pst
-    # prep_truth_model('daily_model_files_org', run=True)
+    prep_truth_model('daily_model_files_org', run=True)
     # prep_simple_model('monthly_model_files_org', run=True)
 
     ## run truth model
     # setup_run_truth_pst('daily_model_files_sub', num_reals=10)
 
     ##run first scenario
-    setup_simple_pst('monthly_model_files_sub', hds=True)
-    run_ies('tmp_pst_hds', m_d="master_ies_hds", num_workers=8, num_reals=200, noptmax=3, drop_conflicts=True,
-                port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
-                use_condor=False)
+    # setup_simple_pst('monthly_model_files_sub', hds=True)
+    # run_ies('tmp_pst_hds', m_d="master_ies_hds", num_workers=8, num_reals=200, noptmax=3, drop_conflicts=True,
+    #             port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
+    #             use_condor=False)
     #postprocess
 
     ##run second scenario
