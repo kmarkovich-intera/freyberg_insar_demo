@@ -242,21 +242,21 @@ def prep_truth_model(t_d, run=False):
     sgs_str = "2.06, 1.94, 2.06"  # Specific gravity of saturated soils (unitless)
     cg_theta_str = "0.32, 0.45, 0.32"  # Coarse-grained material porosity (unitless)
     cg_ske_str = "0.00005, 0.0003, 0.00005"  # Elastic specific storage ($1/m$)
-    ssv_cv_str = "0.0003, 0.0003, 0.0003"  #  initial inelastic specific storage ($1/m$)
-    ssv_cr_str = "0.00005, 0.0003, 0.00005" # initial Elastic specific storage ($1/m$)
-    ib_thick_str = "1., 1., 1."  # Interbed thickness ($m$)
+    # ssv_cv_str = "0.0003, 0.0003, 0.0003"  #  initial inelastic specific storage ($1/m$)
+    # sse_cr_str = "0.00005, 0.0003, 0.00005" # initial Elastic specific storage ($1/m$)
+    ib_thick_str = "1., 2.5, 1."  # Interbed thickness ($m$)
     ib_theta = 0.45  # Interbed initial porosity 0.0003(unitless)
-    # ib_cr = 0.01  # Interbed recompression index (unitless)
-    # ib_cv = 0.25  # Interbed compression index (unitless)
-    stress_offset = 0.0  # Initial preconsolidation stress offset ($m$)
+    ib_cr = 0.01  # Interbed recompression index (unitless)
+    ib_cv = 0.25  # Interbed compression index (unitless)
+    stress_offset = 15.0  # Initial preconsolidation stress offset ($m$)
 
     # parse strings into tuples
     sgm = [float(value) for value in sgm_str.split(",")]
     sgs = [float(value) for value in sgs_str.split(",")]
     cg_theta = [float(value) for value in cg_theta_str.split(",")]
     cg_ske = [float(value) for value in cg_ske_str.split(",")]
-    ssv_cv = [float(value) for value in ssv_cv_str.split(",")]
-    ssv_cr = [float(value) for value in ssv_cr_str.split(",")]
+    # ssv_cv = [float(value) for value in ssv_cv_str.split(",")]
+    # sse_cr = [float(value) for value in sse_cr_str.split(",")]
     ib_thick = [float(value) for value in ib_thick_str.split(",")]
 
 
@@ -277,8 +277,10 @@ def prep_truth_model(t_d, run=False):
                         stress_offset,
                         ib_thick[k],
                         1.0,
-                        ssv_cv[k],
-                        ssv_cr[k],
+                        # ssv_cv[k],
+                        # sse_cr[k],
+                        ib_cv,
+                        ib_cr,
                         ib_theta,
                         0.001,
                         0,
@@ -307,7 +309,7 @@ def prep_truth_model(t_d, run=False):
             compaction_coarse_filerecord = 'truth.ccc',
             zdisplacement_filerecord = 'truth.zbz',
             specified_initial_preconsolidation_stress=False,
-            compression_indices=False,
+            compression_indices=True,
             boundnames=True,
             ninterbeds=len(csub_pakdata),
             sgm=sgm,
@@ -328,7 +330,7 @@ def prep_truth_model(t_d, run=False):
         pyemu.os_utils.run("mf6", cwd=new_d)
 
 def setup_run_truth_pst(t_d, num_reals = 100):
-    template_ws = "tmp_pst"
+    template_ws = "tmp_pst_daily"
     temp_model_ws = "temp"
     if os.path.exists(temp_model_ws):
         shutil.rmtree(temp_model_ws)
@@ -414,10 +416,10 @@ def setup_run_truth_pst(t_d, num_reals = 100):
             "sto_sy": [0.5, 2, 0.01, 0.25],
             "recharge_": [0.5, 2, 0, 0.1],
             "cg_ske_": [0.1, 10., 0.000001, 0.001],
-            # "ssv_cv":  [0.1, 10., 0.0001, 0.01], #these are conductance-style pars
-            # "ib_theta_": [0.25, 1.75, 0.10, 0.45], #these are conductance-style pars
-            # ib_thick_
             "cg_theta_": [0.25, 1.75, 0.01, 0.3]}
+
+    # tags = {"cg_ske_": [0.1, 10., 0.000001, 0.001],
+    #         "cg_theta_": [0.25, 1.75, 0.01, 0.3]}
     #interbed thickess, inelastic Ss, interbed porosity are all conductance style pars (not array)
 
     # use the idomain array for masking parameter locations
@@ -535,15 +537,15 @@ def setup_run_truth_pst(t_d, num_reals = 100):
                       pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[10], upper_bound=2.,
                       lower_bound=0.5, par_type="grid", ult_ubound=.45, ult_lbound=0.01)
 
-    # add grid-scale parameters for CSUB interbed inelastic Ss
-    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
-                      pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
-                      lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
-
-    # add grid-scale parameters for CSUB interbed elastic Ss
-    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
-                      pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
-                      lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
+    # # add grid-scale parameters for CSUB interbed inelastic Ss
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
+    #                   pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
+    #                   lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
+    #
+    # # add grid-scale parameters for CSUB interbed elastic Ss
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
+    #                   pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
+    #                   lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
 
     # add grid-scale parameters for CSUB interbed K33
     pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_kv",
@@ -562,6 +564,16 @@ def setup_run_truth_pst(t_d, num_reals = 100):
     # build pest control file
     pst = pf.build_pst('freyberg.pst')
     par = pst.parameter_data
+
+    # #tie cg_ske and sse_cr together
+    # cpar = par.loc[par.parnme.str.contains("cg_ske"), :]
+    # spar = par.loc[par.parnme.str.contains("sse"), :]
+    # vpar = par.loc[par.parnme.str.contains("ssv"), :]
+    # print(cpar, spar, vpar)
+    # exit()
+
+    # #tie sse_cr and ssv_cc together
+    # rpar = par.loc[par.parnme.str.contains("recharge"), :]
 
     # draw from the prior and save the ensemble in binary format
     pe = pf.draw(num_reals, use_specsim=True)
@@ -593,51 +605,11 @@ def setup_run_truth_pst(t_d, num_reals = 100):
     pyemu.os_utils.run("pestpp-ies freyberg.pst", cwd=template_ws)
 
 def build_localizer(t_d):
-    #make sure obs inform the right temporal pars
-    #assume hds and streamflow can't inform porosity pars
-    
-    pst = pyemu.Pst(os.path.join(t_d, "freyberg.pst"))
-    # get par data
-    par = pst.parameter_data
-    par.inst = par.inst.astype(int)
-    # get obs data
-    obs = pst.observation_data
-    obs.time = obs.time.astype(float)
-    # temporal units are different in obs and par:
-    par.inst.unique(), obs.time.unique()
-
-    rpar = par.loc[par.parnme.str.contains("recharge"), :]
-    rpar = rpar.loc[rpar.ptype == "cn", :]
-    par.loc[rpar.parnme, "inst"] = rpar.parnme.apply(lambda x: int(x.split("tcn")[0].split('_')[-1]) - 1)
-
-    # add a column for each stress period;
-    # we already have spd values assocaited to paranetemr names,
-    # so we will use this to associate parameters to observations in time
-    times = obs.time.unique()
-    times.sort()
-    for kper, time in enumerate(times):
-        par.loc[par.inst == int(kper), 'time'] = time
-    par.loc[rpar.parnme, ["inst", "time"]]
-
-    # static parameters; these parameters will all be informed by historic obsevration data
-    prefixes = ['npf', 'sto', 'icstrt', 'ghb', 'sfrcondgr', 'sfrcondcn', ]
-    static_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
-    loc_matrix_cols = static_pargps.copy()
-
-    prefixes = ['csub_ibt', 'cg_theta']
-    dont_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
-    loc_matrix_cols.extend(dont_pargps)
-
-    # temporal pars; parameters in the past cannot be informed by observations in the future
-    prefixes = ['wel', 'rch', 'sfrgr']
-    temp_pargps = [i for i in pst.par_groups if any(i.startswith(s) for s in prefixes)]
-    temporal_pars = par.loc[par.apply(lambda x: "gr" not in x.parnme and "pp" not in x.parnme
-                                                and x.pargp in temp_pargps, axis=1), :].copy()
-    loc_matrix_cols.extend(temporal_pars.parnme.tolist())
-
+    #hds and streamflow can't inform porosity pars
 
     obs = pst.observation_data.loc[pst.nnz_obs_names, :]
-    hobs = obs.loc[obs.oname == "head", "obsnme"].values
+    hobs = obs.loc[obs.oname == "hds", "obsnme"].values
+    sobs = obs.loc[obs.oname == "flow", "obsnme"].values
     assert hobs.shape[0] > 0
 
     pargps = par.pargp.unique()
@@ -656,8 +628,8 @@ def build_localizer(t_d):
 
     df = pd.DataFrame(columns=pargps, index=pst.nnz_obs_names, dtype=float)
     df.loc[:, :] = 1.0
-    # df.loc[:,"pfac"] = 0.0
     df.loc[hobs, tpargps] = 0.0
+    df.loc[sobs, tpargps] = 0.0
 
     print(df.shape)
     assert df.shape[0] == pst.nnz_obs
@@ -670,9 +642,7 @@ def build_localizer(t_d):
     plt.close(fig)
     df.to_csv(os.path.join(t_d, "localizer.csv"))
     pst.pestpp_options["ies_localizer"] = "localizer.csv"
-    pst.control_data.noptmax = -2
     pst.write(os.path.join(t_d, "freyberg.pst"), version=2)
-    pyemu.os_utils.run("pestpp-ies freyberg.pst", cwd=t_d)
 
 def map_complex_to_simple_bat(c_d,b_d,real_idx):
     """map the daily model outputs to the monthly model observations
@@ -996,17 +966,26 @@ def prep_simple_model(t_d, run=False):
     # inputs for csub
     gammaw = 9806.65  # Compressibility of water (Newtons/($m^3$)
     beta = 4.6612e-10  # Specific gravity of water (1/$Pa$)
-    sgm = 1.77  # Specific gravity of moist soils (unitless)
-    sgs = 2.06  # Specific gravity of saturated soils (unitless)
-    cg_theta = 0.32  # Coarse-grained material porosity (unitless)
-    cg_ske = 0.00005  # Elastic specific storage ($1/m$)
-    ssv_cv = 0.0003  # initial inelastic specific storage ($1/m$)
-    ssv_cr = 0.00005  # initial Elastic specific storage ($1/m$)
-    ib_thick = 1.  # Interbed thickness ($m$)
+    sgm_str = "1.77, 1.60, 1.77"  # Specific gravity of moist soils (unitless)
+    sgs_str = "2.06, 1.94, 2.06"  # Specific gravity of saturated soils (unitless)
+    cg_theta_str = "0.32, 0.45, 0.32"  # Coarse-grained material porosity (unitless)
+    cg_ske_str = "0.00005, 0.0003, 0.00005"  # Elastic specific storage ($1/m$)
+    # ssv_cv_str = "0.0003, 0.0003, 0.0003"  #  initial inelastic specific storage ($1/m$)
+    # sse_cr_str = "0.00005, 0.0003, 0.00005" # initial Elastic specific storage ($1/m$)
+    ib_thick_str = "1., 2.5, 1."  # Interbed thickness ($m$)
     ib_theta = 0.45  # Interbed initial porosity 0.0003(unitless)
-    # ib_cr = 0.01  # Interbed recompression index (unitless)
-    # ib_cv = 0.25  # Interbed compression index (unitless)
-    stress_offset = 0.0  # Initial preconsolidation stress offset ($m$)
+    ib_cr = 0.01  # Interbed recompression index (unitless)
+    ib_cv = 0.25  # Interbed compression index (unitless)
+    stress_offset = 15.0  # Initial preconsolidation stress offset ($m$)
+
+    # parse strings into tuples
+    sgm = [float(value) for value in sgm_str.split(",")]
+    sgs = [float(value) for value in sgs_str.split(",")]
+    cg_theta = [float(value) for value in cg_theta_str.split(",")]
+    cg_ske = [float(value) for value in cg_ske_str.split(",")]
+    # ssv_cv = [float(value) for value in ssv_cv_str.split(",")]
+    # sse_cr = [float(value) for value in sse_cr_str.split(",")]
+    ib_thick = [float(value) for value in ib_thick_str.split(",")]
 
     # create interbed package data
     icsubno = 0
@@ -1023,10 +1002,12 @@ def prep_simple_model(t_d, run=False):
                         (k, i, j),
                         "nodelay",
                         stress_offset,
-                        ib_thick,
+                        ib_thick[k],
                         1.0,
-                        ssv_cv,
-                        ssv_cr,
+                        # ssv_cv[k],
+                        # sse_cr[k],
+                        ib_cv,
+                        ib_cr,
                         ib_theta,
                         0.001,
                         0,
@@ -1037,8 +1018,8 @@ def prep_simple_model(t_d, run=False):
 
     oc = flopy.mf6.ModflowGwfoc(
         gwf,
-        budget_filerecord="simple.cbb",
-        head_filerecord="simple.hds",
+        budget_filerecord="truth.cbb",
+        head_filerecord="truth.hds",
         saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
     )
 
@@ -1047,14 +1028,14 @@ def prep_simple_model(t_d, run=False):
         # print_input=True,
         save_flows=True,
         head_based=False,
-        compaction_filerecord='simple.cmp',
-        compaction_elastic_filerecord='simple.cec',
-        compaction_inelastic_filerecord='simple.cnc',
-        compaction_interbed_filerecord='simple.cic',
-        compaction_coarse_filerecord='simple.ccc',
-        zdisplacement_filerecord='simple.zbz',
+        compaction_filerecord='truth.cmp',
+        compaction_elastic_filerecord='truth.cec',
+        compaction_inelastic_filerecord='truth.cnc',
+        compaction_interbed_filerecord='truth.cic',
+        compaction_coarse_filerecord='truth.ccc',
+        zdisplacement_filerecord='truth.zbz',
         specified_initial_preconsolidation_stress=False,
-        compression_indices=False,
+        compression_indices=True,
         boundnames=True,
         ninterbeds=len(csub_pakdata),
         sgm=sgm,
@@ -1423,15 +1404,15 @@ def setup_simple_pst(t_d, hds=True, strmflw = False, zdisp=False, num_reals = 10
                       pargp="csub_ibt", index_cols=[0, 1, 2, 3], use_cols=[10], upper_bound=2.,
                       lower_bound=0.5, par_type="grid", ult_ubound=.45, ult_lbound=0.01)
 
-    # add grid-scale parameters for CSUB interbed inelastic Ss
-    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
-                      pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
-                      lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
-
-    # add grid-scale parameters for CSUB interbed elastic Ss
-    pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
-                      pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
-                      lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
+    # # add grid-scale parameters for CSUB interbed inelastic Ss
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_ssv",
+    #                   pargp="csub_ssv", index_cols=[0, 1, 2, 3], use_cols=[8], upper_bound=10.,
+    #                   lower_bound=0.1, par_type="grid", ult_ubound=0.01, ult_lbound=0.00001)
+    #
+    # # add grid-scale parameters for CSUB interbed elastic Ss
+    # pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_sse",
+    #                   pargp="csub_sse", index_cols=[0, 1, 2, 3], use_cols=[9], upper_bound=10.,
+    #                   lower_bound=0.1, par_type="grid", ult_ubound=0.001, ult_lbound=0.000001)
 
     # add grid-scale parameters for CSUB interbed K33
     pf.add_parameters(filenames="freyberg_csub.csub_packagedata.txt", par_name_base="csub_kv",
@@ -1475,7 +1456,7 @@ def setup_simple_pst(t_d, hds=True, strmflw = False, zdisp=False, num_reals = 10
     #now for some obs and weights!
     pst.observation_data.weight = 0
 
-    map_complex_to_simple_bat('daily_model_files_sub','monthly_model_files_sub', 0)
+    map_complex_to_simple_bat('tmp_pst_daily',new_d, 0)
     obs = pst.observation_data
 
     if strmflw==False:
@@ -1490,11 +1471,9 @@ def setup_simple_pst(t_d, hds=True, strmflw = False, zdisp=False, num_reals = 10
         kobs.sort_values(by="time", inplace=True)
         obs.loc[kobs.obsnme, "weight"] = 0.0
 
+    pst.write(os.path.join(pf.new_d,"lisbon.pst"),version=2)
 
-    pst.pestpp_options["ies_localizer"] = "localizer.csv"
-    pst.write(os.path.join(new_d, "freyberg.pst"))
-
-
+    build_localizer(pf.new_d)
 
 if __name__ == "__main__":
     # invest()
@@ -1503,12 +1482,12 @@ if __name__ == "__main__":
     # prep_truth_model('daily_model_files_org', run=True)
     # prep_simple_model('monthly_model_files_org', run=True)
 
-    ##run truth model
-    # setup_run_truth_pst('daily_model_files_sub', num_reals = 10)
+    ## run truth model
+    # setup_run_truth_pst('daily_model_files_sub', num_reals=10)
 
     ##run first scenario
     setup_simple_pst('monthly_model_files_sub', hds=True)
-    run_ies('tmp_pst_hds', m_d="master_ies_hds", num_workers=10, num_reals=200, noptmax=3, drop_conflicts=True,
+    run_ies('tmp_pst_hds', m_d="master_ies_hds", num_workers=8, num_reals=200, noptmax=3, drop_conflicts=True,
                 port=4263, hostname=None, subset_size=4, bad_phi_sigma=1000.0, overdue_giveup_fac=10,
                 use_condor=False)
     #postprocess
